@@ -1,6 +1,6 @@
 package model
 
-import "feo.vip/chat/core"
+import "github.com/ninenhan/go-chat/core"
 
 // GenerationSlot 描述模板中的一个插槽。
 type GenerationSlot struct {

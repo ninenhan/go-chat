@@ -1,7 +1,7 @@
 package model
 
 import (
-	"feo.vip/chat/core"
+	"github.com/ninenhan/go-chat/core"
 	"time"
 )
 

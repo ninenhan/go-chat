@@ -2,7 +2,7 @@ package service
 
 import (
 	"errors"
-	"feo.vip/chat/model"
+	"github.com/ninenhan/go-chat/model"
 	"gorm.io/gorm"
 	"log"
 )

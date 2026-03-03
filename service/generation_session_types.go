@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"feo.vip/chat/core"
-	"feo.vip/chat/model"
+	"github.com/ninenhan/go-chat/core"
+	"github.com/ninenhan/go-chat/model"
 )
 
 // GenerationChatCaller 定义底层模型调用函数，便于替换供应商实现或测试 mock。

@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 	"errors"
-	"feo.vip/chat/config"
-	"feo.vip/chat/model"
+	"github.com/ninenhan/go-chat/config"
+	"github.com/ninenhan/go-chat/model"
 	"gorm.io/gorm"
 	"log"
 	"log/slog"

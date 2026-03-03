@@ -1,7 +1,7 @@
 package service
 
 import (
-	"feo.vip/chat/model"
+	"github.com/ninenhan/go-chat/model"
 	"gorm.io/gorm"
 	"math"
 )

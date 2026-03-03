@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"feo.vip/chat/model"
+	"github.com/ninenhan/go-chat/model"
 )
 
 func TestGenerationTemplateSlots(t *testing.T) {

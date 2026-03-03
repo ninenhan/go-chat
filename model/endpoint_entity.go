@@ -2,8 +2,8 @@ package model
 
 import (
 	"encoding/json"
-	"feo.vip/chat/core"
 	"fmt"
+	"github.com/ninenhan/go-chat/core"
 	"gorm.io/datatypes"
 	"time"
 )

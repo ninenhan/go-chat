@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"feo.vip/chat/core"
+	"github.com/ninenhan/go-chat/core"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/azure"
 	"github.com/openai/openai-go/option"

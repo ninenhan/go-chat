@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"feo.vip/chat/model"
+	"github.com/ninenhan/go-chat/model"
 )
 
 // InMemoryGenerationStore 是 GenerationSessionStore 的内存实现，适合本地开发或测试。

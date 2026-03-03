@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"feo.vip/chat/core"
+	"github.com/ninenhan/go-chat/core"
 )
 
 const defaultHTTPProxyClientTimeout = 5 * time.Minute

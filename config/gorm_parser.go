@@ -1,8 +1,8 @@
 package config
 
 import (
-	"feo.vip/chat/model"
 	"fmt"
+	"github.com/ninenhan/go-chat/model"
 	"github.com/ninenhan/go-workflow/flow"
 	"github.com/ninenhan/go-workflow/fn"
 	"gorm.io/gorm"

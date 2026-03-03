@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"feo.vip/chat/core"
-	"feo.vip/chat/model"
+	"github.com/ninenhan/go-chat/core"
+	"github.com/ninenhan/go-chat/model"
 )
 
 func (s *DefaultGenerationService) StartSession(ctx context.Context, req *model.GenerationSessionStartRequest) (*model.GenerationSession, error) {
