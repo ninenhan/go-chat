@@ -14,6 +14,9 @@ type GormModel struct {
 type GormAuditModel struct {
 	CreatedBy string `gorm:"type:varchar(64);column:created_by" json:"createdBy"`
 	UpdatedBy string `gorm:"type:varchar(64);column:updated_by" json:"updatedBy"`
+
+	CreatedByName string `gorm:"-" json:"createdByDictText,omitempty"`
+	UpdatedByName string `gorm:"-" json:"updatedByDictText,omitempty"`
 }
 
 type GormDeleteModel struct {
