@@ -159,6 +159,17 @@ func (s *ModelService) UpdateModel(item *model.GblModel) (*model.GblModel, error
 	return &updated, nil
 }
 
+func (s *ModelService) GetModelByCodeAndTaskType(ctx context.Context, code string, taskType model.GenerationTaskType) (*model.GblModel, error) {
+	item, err := s.GetModelByCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	if taskType.IsValid() && !item.SupportsTaskType(taskType) {
+		return nil, errors.New("model 不支持指定任务类型")
+	}
+	return item, nil
+}
+
 func validateModelPayload(item *model.GblModel) error {
 	if strings.TrimSpace(item.Code) == "" {
 		return errors.New("model code 不能为空")

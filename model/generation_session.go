@@ -26,7 +26,10 @@ const (
 type GenerationMessage struct {
 	MessageID           string                     `json:"messageId"`
 	Role                GenerationMessageRole      `json:"role"`
+	TaskType            GenerationTaskType         `json:"taskType,omitempty"`
 	Content             string                     `json:"content"`
+	Attachments         []GenerationAttachment     `json:"attachments,omitempty"`
+	Artifacts           []GenerationArtifact       `json:"artifacts,omitempty"`
 	Feedback            *GenerationMessageFeedback `json:"feedback,omitempty"`
 	LLMResponseID       string                     `json:"llmResponseId,omitempty"`
 	Usage               *core.Usage                `json:"usage,omitempty"`
@@ -77,6 +80,7 @@ type GenerationSession struct {
 	SessionID            string                  `json:"sessionId"`
 	TaskID               string                  `json:"taskId"`
 	Model                string                  `json:"model"`
+	DefaultTaskType      GenerationTaskType      `json:"defaultTaskType,omitempty"`
 	LatestMessageID      string                  `json:"latestMessageId,omitempty"`
 	Endpoint             *core.EndpointSelector  `json:"-"`
 	XRequest             *core.XRequest          `json:"-"`
@@ -94,6 +98,7 @@ type GenerationSession struct {
 type GenerationSessionStartRequest struct {
 	SessionID            string                 `json:"sessionId,omitempty"`
 	Model                string                 `json:"model"`
+	DefaultTaskType      GenerationTaskType     `json:"defaultTaskType,omitempty"`
 	TemplateID           uint                   `json:"templateId,omitempty"`
 	TemplateCode         string                 `json:"templateCode,omitempty"`
 	TemplateVars         map[string]string      `json:"templateVars,omitempty"`
@@ -108,13 +113,27 @@ type GenerationSessionStartRequest struct {
 type GenerationSessionChatRequest struct {
 	SessionID string `json:"sessionId"`
 
-	BaseURL string `json:"baseURL"`
-	APIKey  string `json:"apiKey"`
-	Model   string `json:"model,omitempty"`
+	BaseURL  string             `json:"baseURL"`
+	APIKey   string             `json:"apiKey"`
+	Model    string             `json:"model,omitempty"`
+	TurnType GenerationTaskType `json:"turnType,omitempty"`
 
 	Prompt            string                   `json:"prompt"`
 	Template          string                   `json:"template"`
 	TemplateVars      map[string]string        `json:"templateVars"`
+	Attachments       []GenerationAttachment   `json:"attachments,omitempty"`
+	Image             string                   `json:"image,omitempty"`
+	Images            []string                 `json:"images,omitempty"`
+	MaskImage         *GenerationAttachment    `json:"maskImage,omitempty"`
+	NegativePrompt    string                   `json:"negativePrompt,omitempty"`
+	ImageSize         string                   `json:"imageSize,omitempty"`
+	Size              string                   `json:"size,omitempty"`
+	ImageQuality      string                   `json:"imageQuality,omitempty"`
+	ImageStyle        string                   `json:"imageStyle,omitempty"`
+	ImageCount        int                      `json:"imageCount,omitempty"`
+	N                 int                      `json:"n,omitempty"`
+	OutputFormat      string                   `json:"output_format,omitempty"`
+	Watermark         *bool                    `json:"watermark,omitempty"`
 	TemplateID        uint                     `json:"templateId,omitempty"`
 	TemplateSlots     []GenerationTemplateSlot `json:"templateSlots,omitempty"`
 	DisplayPrompt     string                   `json:"displayPrompt,omitempty"`
@@ -139,10 +158,12 @@ type GenerationSessionChatRequest struct {
 type GenerationSessionChatResponse struct {
 	SessionID          string                        `json:"sessionId"`
 	TaskID             string                        `json:"taskId"`
+	TaskType           GenerationTaskType            `json:"taskType,omitempty"`
 	UserMessageID      string                        `json:"userMessageId"`
 	AssistantMessageID string                        `json:"assistantMessageId"`
 	Prompt             string                        `json:"prompt"`
 	Output             string                        `json:"output"`
+	Artifacts          []GenerationArtifact          `json:"artifacts,omitempty"`
 	Chunks             []string                      `json:"chunks,omitempty"`
 	Raw                any                           `json:"raw,omitempty"`
 	Status             GenerationTaskStatus          `json:"status,omitempty"`

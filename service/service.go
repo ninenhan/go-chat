@@ -73,6 +73,25 @@ func (s *EndpointService) GetEndpointByModelCode(ctx context.Context, code strin
 	return &item, nil
 }
 
+func (s *EndpointService) GetEndpointByModelCodeAndTaskType(ctx context.Context, code string, taskType model.GenerationTaskType) (*model.GblEndpoint, error) {
+	records, err := s.QueryAvailableModelEndpoints(ctx, code, 200)
+	if err != nil {
+		return nil, err
+	}
+	code = strings.TrimSpace(code)
+	for i := range records {
+		item := records[i]
+		if item.ModelCode != code {
+			continue
+		}
+		if taskType.IsValid() && !item.SupportsTaskType(taskType) {
+			continue
+		}
+		return &item, nil
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
 func (s *EndpointService) DeleteEndpoint(id any) error {
 	if id == nil {
 		return errors.New("endpoint ID 不能为空")

@@ -32,6 +32,7 @@ func (s *DefaultGenerationService) StartSession(ctx context.Context, req *model.
 		SessionID:          sessionID,
 		TaskID:             sessionID,
 		Model:              strings.TrimSpace(req.Model),
+		DefaultTaskType:    req.DefaultTaskType,
 		Status:             model.GenerationSessionActive,
 		SystemPrompts:      trimNonEmpty(req.SystemPrompts),
 		ContextLimitTokens: ctxLimit,
@@ -72,6 +73,21 @@ func (s *DefaultGenerationService) ChatSession(ctx context.Context, req *model.G
 		return nil, err
 	}
 
+	taskType := s.resolveSessionTaskType(ctx, session, req)
+	switch taskType {
+	case model.GenerationTaskTypeImageGenerate, model.GenerationTaskTypeImageEdit:
+		return s.chatImageSession(ctx, session, req, taskType)
+	default:
+		return s.chatTextSession(ctx, session, req, onDelta)
+	}
+}
+
+func (s *DefaultGenerationService) chatTextSession(
+	ctx context.Context,
+	session *model.GenerationSession,
+	req *model.GenerationSessionChatRequest,
+	onDelta func(delta string) error,
+) (*model.GenerationSessionChatResponse, error) {
 	prompt, err := s.BuildPrompt(&model.GenerationGenerateRequest{
 		Prompt:       req.Prompt,
 		Template:     req.Template,
@@ -101,7 +117,9 @@ func (s *DefaultGenerationService) ChatSession(ctx context.Context, req *model.G
 	userMsg := model.GenerationMessage{
 		MessageID:           fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		Role:                model.GenerationRoleUser,
+		TaskType:            model.GenerationTaskTypeTextChat,
 		Content:             prompt,
+		Attachments:         append([]model.GenerationAttachment(nil), req.Attachments...),
 		ReferenceMessageIDs: append([]string(nil), req.ReferenceMessageIDs...),
 		Tokens:              s.estimateTokens(prompt),
 		CreatedAt:           time.Now(),
@@ -132,6 +150,7 @@ func (s *DefaultGenerationService) ChatSession(ctx context.Context, req *model.G
 	resp := &model.GenerationSessionChatResponse{
 		SessionID:     session.SessionID,
 		TaskID:        session.TaskID,
+		TaskType:      model.GenerationTaskTypeTextChat,
 		UserMessageID: userMsg.MessageID,
 		Prompt:        prompt,
 		Status:        model.GenerationTaskRunning,
@@ -185,6 +204,7 @@ func (s *DefaultGenerationService) ChatSession(ctx context.Context, req *model.G
 	assistantMsg := model.GenerationMessage{
 		MessageID: fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 		Role:      model.GenerationRoleAssistant,
+		TaskType:  model.GenerationTaskTypeTextChat,
 		Content:   resp.Output,
 		Tokens:    s.estimateTokens(resp.Output),
 		CreatedAt: time.Now(),
@@ -202,6 +222,112 @@ func (s *DefaultGenerationService) ChatSession(ctx context.Context, req *model.G
 	resp.AssistantMessageID = assistantMsg.MessageID
 	resp.Status = model.GenerationTaskCompleted
 	return resp, nil
+}
+
+func (s *DefaultGenerationService) chatImageSession(
+	ctx context.Context,
+	session *model.GenerationSession,
+	req *model.GenerationSessionChatRequest,
+	taskType model.GenerationTaskType,
+) (*model.GenerationSessionChatResponse, error) {
+	modelCode := strings.TrimSpace(req.Model)
+	if modelCode == "" {
+		modelCode = strings.TrimSpace(session.Model)
+	}
+	if modelCode == "" {
+		return nil, errors.New("model 不能为空")
+	}
+	prompt, err := s.BuildPrompt(&model.GenerationGenerateRequest{
+		Prompt:       req.Prompt,
+		Template:     req.Template,
+		TemplateVars: req.TemplateVars,
+	})
+	if err != nil {
+		return nil, err
+	}
+	session.Model = modelCode
+	inputImages := normalizeSessionInputImages(req)
+
+	userMsg := model.GenerationMessage{
+		MessageID:           fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+		Role:                model.GenerationRoleUser,
+		TaskType:            taskType,
+		Content:             prompt,
+		Attachments:         inputImages,
+		ReferenceMessageIDs: append([]string(nil), req.ReferenceMessageIDs...),
+		Tokens:              s.estimateTokens(prompt),
+		CreatedAt:           time.Now(),
+	}
+	if err := s.persistRunning(ctx, session.TaskID, prompt, modelCode); err != nil {
+		return nil, err
+	}
+
+	imageResp, err := s.GenerateImage(ctx, &model.GenerationImageRequest{
+		TaskID:         session.TaskID,
+		TaskType:       taskType,
+		BaseURL:        req.BaseURL,
+		APIKey:         req.APIKey,
+		Model:          modelCode,
+		Prompt:         prompt,
+		NegativePrompt: req.NegativePrompt,
+		InputImages:    inputImages,
+		Image:          strings.TrimSpace(req.Image),
+		Images:         append([]string(nil), req.Images...),
+		MaskImage:      cloneAttachmentPtr(req.MaskImage),
+		Size:           resolveSessionImageSize(req),
+		Quality:        req.ImageQuality,
+		Style:          req.ImageStyle,
+		N:              resolveSessionImageCount(req),
+		OutputFormat:   req.OutputFormat,
+		Watermark:      req.Watermark,
+		ExtraHeaders:   cloneHeaderMap(req.ExtraHeaders),
+		ExtraBody:      mergeImageExtraBody(req.ExtraBody, req.OutputFormat, req.Watermark),
+		BaseGenerationRequest: model.BaseGenerationRequest{
+			Model:    modelCode,
+			Endpoint: req.Endpoint,
+			XRequest: req.XRequest,
+		},
+	})
+	if err != nil {
+		return nil, s.failAndMerge(ctx, session.TaskID, err)
+	}
+
+	output := strings.TrimSpace(imageResp.Output)
+	if output == "" {
+		output = defaultImageOutputText(imageResp.Artifacts)
+	}
+	assistantMsg := model.GenerationMessage{
+		MessageID: fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+		Role:      model.GenerationRoleAssistant,
+		TaskType:  taskType,
+		Content:   output,
+		Artifacts: append([]model.GenerationArtifact(nil), imageResp.Artifacts...),
+		Tokens:    s.estimateTokens(output),
+		CreatedAt: time.Now(),
+	}
+	if err := s.appendSessionMessage(ctx, session, userMsg); err != nil {
+		return nil, err
+	}
+	if err := s.appendSessionMessage(ctx, session, assistantMsg); err != nil {
+		return nil, err
+	}
+	if err := s.persistComplete(ctx, session.TaskID, output); err != nil {
+		return nil, err
+	}
+
+	return &model.GenerationSessionChatResponse{
+		SessionID:          session.SessionID,
+		TaskID:             session.TaskID,
+		TaskType:           taskType,
+		UserMessageID:      userMsg.MessageID,
+		AssistantMessageID: assistantMsg.MessageID,
+		Prompt:             prompt,
+		Output:             output,
+		Artifacts:          append([]model.GenerationArtifact(nil), imageResp.Artifacts...),
+		Raw:                imageResp.Raw,
+		Status:             model.GenerationTaskCompleted,
+		Summary:            session.Summary,
+	}, nil
 }
 
 func (s *DefaultGenerationService) prepareSessionMessages(
@@ -510,6 +636,8 @@ func cloneGenerationSession(session *model.GenerationSession) *model.GenerationS
 		for _, msg := range session.Messages {
 			copyMsg := msg
 			copyMsg.ReferenceMessageIDs = append([]string(nil), msg.ReferenceMessageIDs...)
+			copyMsg.Attachments = append([]model.GenerationAttachment(nil), msg.Attachments...)
+			copyMsg.Artifacts = append([]model.GenerationArtifact(nil), msg.Artifacts...)
 			out.Messages = append(out.Messages, copyMsg)
 		}
 	}

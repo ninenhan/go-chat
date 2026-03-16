@@ -95,7 +95,7 @@ func (p *Pipe) DoPipe(input any) (any, error) {
 	if p.Type == nil || *p.Type == PipeTypeDefault {
 		return input, nil
 	}
-	slog.Info("PipeType: %s", p.Type)
+	slog.Info("PipeType: %s", "type", p.Type)
 	switch *p.Type {
 	case PipeTypeNonStreamPlaintext:
 		if input, ok := input.(ChatGPTResponse); ok {

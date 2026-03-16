@@ -48,6 +48,9 @@ func (s *InMemoryGenerationStore) SaveSession(_ context.Context, session *model.
 	if session.Model != "" {
 		existing.Model = session.Model
 	}
+	if session.DefaultTaskType.IsValid() {
+		existing.DefaultTaskType = session.DefaultTaskType
+	}
 	if session.Status != "" {
 		existing.Status = session.Status
 	}
@@ -106,6 +109,8 @@ func (s *InMemoryGenerationStore) SaveSessionMessage(_ context.Context, sessionI
 	}
 	cp := *message
 	cp.ReferenceMessageIDs = append([]string(nil), message.ReferenceMessageIDs...)
+	cp.Attachments = append([]model.GenerationAttachment(nil), message.Attachments...)
+	cp.Artifacts = append([]model.GenerationArtifact(nil), message.Artifacts...)
 	session.Messages = append(session.Messages, cp)
 	session.UpdatedAt = time.Now()
 	return nil
@@ -152,6 +157,8 @@ func cloneMessagesForStore(in []model.GenerationMessage) []model.GenerationMessa
 	for _, msg := range in {
 		cp := msg
 		cp.ReferenceMessageIDs = append([]string(nil), msg.ReferenceMessageIDs...)
+		cp.Attachments = append([]model.GenerationAttachment(nil), msg.Attachments...)
+		cp.Artifacts = append([]model.GenerationArtifact(nil), msg.Artifacts...)
 		out = append(out, cp)
 	}
 	return out

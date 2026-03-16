@@ -31,6 +31,8 @@ type GenerationConfig struct {
 	TokenEstimator       func(text string) int
 	Summarizer           GenerationSummarizer
 	ChatCaller           GenerationChatCaller
+	ImageCaller          GenerationImageCaller
+	TaskResolver         GenerationTaskResolver
 }
 
 // GenerationOption 用于配置 service。
@@ -95,6 +97,22 @@ func WithGenerationChatCaller(caller GenerationChatCaller) GenerationOption {
 	}
 }
 
+func WithGenerationImageCaller(caller GenerationImageCaller) GenerationOption {
+	return func(cfg *GenerationConfig) {
+		if caller != nil {
+			cfg.ImageCaller = caller
+		}
+	}
+}
+
+func WithGenerationTaskResolver(resolver GenerationTaskResolver) GenerationOption {
+	return func(cfg *GenerationConfig) {
+		if resolver != nil {
+			cfg.TaskResolver = resolver
+		}
+	}
+}
+
 // GenerationAsyncResult 是 Submit 异步回调结果。
 type GenerationAsyncResult struct {
 	TaskID   string
@@ -113,6 +131,7 @@ type GenerationService interface {
 
 	Generate(ctx context.Context, req *model.GenerationGenerateRequest) (*model.GenerationGenerateResponse, error)
 	GenerateStream(ctx context.Context, req *model.GenerationGenerateRequest, onDelta func(delta string) error) (*model.GenerationGenerateResponse, error)
+	GenerateImage(ctx context.Context, req *model.GenerationImageRequest) (*model.GenerationImageResponse, error)
 	StartSession(ctx context.Context, req *model.GenerationSessionStartRequest) (*model.GenerationSession, error)
 	GetSession(ctx context.Context, sessionID string) (*model.GenerationSession, error)
 	ChatSession(ctx context.Context, req *model.GenerationSessionChatRequest, onDelta func(delta string) error) (*model.GenerationSessionChatResponse, error)
@@ -152,6 +171,7 @@ func defaultGenerationConfig() GenerationConfig {
 		},
 		TokenEstimator: defaultGenerationTokenEstimator,
 		ChatCaller:     ChatWithXRequest,
+		ImageCaller:    OpenAIImageCaller,
 	}
 }
 
@@ -376,6 +396,10 @@ func (s *DefaultGenerationService) generate(
 	if strings.TrimSpace(req.TaskID) == "" {
 		req.TaskID = s.cfg.TaskIDGenerator()
 	}
+	if req.TaskType != "" && req.TaskType != model.GenerationTaskTypeTextChat {
+		err := errors.New("Generate 仅支持 text_chat，请使用 GenerateImage")
+		return nil, s.failAndMerge(ctx, req.TaskID, err)
+	}
 	if strings.TrimSpace(req.Model) == "" {
 		err := errors.New("model 不能为空")
 		return nil, s.failAndMerge(ctx, req.TaskID, err)
@@ -420,9 +444,10 @@ func (s *DefaultGenerationService) generate(
 	}
 
 	resp := &model.GenerationGenerateResponse{
-		TaskID: req.TaskID,
-		Status: model.GenerationTaskRunning,
-		Prompt: prompt,
+		TaskID:   req.TaskID,
+		TaskType: model.GenerationTaskTypeTextChat,
+		Status:   model.GenerationTaskRunning,
+		Prompt:   prompt,
 	}
 	var builder strings.Builder
 	chunks := make([]string, 0)

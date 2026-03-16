@@ -175,6 +175,183 @@ func TestGenerationSessionAutoSummary(t *testing.T) {
 	}
 }
 
+func TestGenerationSessionRoutesImageTurnToImageCaller(t *testing.T) {
+	store := NewInMemoryGenerationStore()
+	chatCalled := false
+	imageCalled := false
+
+	chatCaller := func(_ context.Context, _ *core.XRequest) (chan any, error) {
+		chatCalled = true
+		ch := make(chan any, 1)
+		close(ch)
+		return ch, nil
+	}
+	imageCaller := func(_ context.Context, req *model.GenerationImageRequest) (*model.GenerationImageResponse, error) {
+		imageCalled = true
+		if req.TaskType != model.GenerationTaskTypeImageGenerate {
+			t.Fatalf("unexpected taskType: %s", req.TaskType)
+		}
+		return &model.GenerationImageResponse{
+			TaskID:   req.TaskID,
+			TaskType: req.TaskType,
+			Status:   model.GenerationTaskCompleted,
+			Prompt:   req.Prompt,
+			Artifacts: []model.GenerationArtifact{
+				{Kind: "image", URI: "https://img.local/1.png"},
+			},
+		}, nil
+	}
+
+	svc := NewGenerationService(
+		WithGenerationSessionStore(store),
+		WithGenerationQueue(false, 0, 0),
+		WithGenerationChatCaller(chatCaller),
+		WithGenerationImageCaller(imageCaller),
+	)
+
+	session, err := svc.StartSession(context.Background(), &model.GenerationSessionStartRequest{
+		Model: "flux-test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession error: %v", err)
+	}
+
+	resp, err := svc.ChatSession(context.Background(), &model.GenerationSessionChatRequest{
+		SessionID: session.SessionID,
+		TurnType:  model.GenerationTaskTypeImageGenerate,
+		Prompt:    "画一只戴墨镜的柴犬",
+		BaseURL:   "https://mock.local",
+		APIKey:    "x",
+	}, nil)
+	if err != nil {
+		t.Fatalf("ChatSession error: %v", err)
+	}
+	if !imageCalled {
+		t.Fatal("expected image caller to be called")
+	}
+	if chatCalled {
+		t.Fatal("chat caller should not be called for image turn")
+	}
+	if resp.TaskType != model.GenerationTaskTypeImageGenerate {
+		t.Fatalf("unexpected response taskType: %s", resp.TaskType)
+	}
+	if len(resp.Artifacts) != 1 || resp.Artifacts[0].URI != "https://img.local/1.png" {
+		t.Fatalf("unexpected artifacts: %+v", resp.Artifacts)
+	}
+}
+
+func TestGenerationSessionInfersImageEditFromAttachments(t *testing.T) {
+	store := NewInMemoryGenerationStore()
+
+	imageCaller := func(_ context.Context, req *model.GenerationImageRequest) (*model.GenerationImageResponse, error) {
+		if req.TaskType != model.GenerationTaskTypeImageEdit {
+			t.Fatalf("unexpected taskType: %s", req.TaskType)
+		}
+		if len(req.InputImages) != 1 || req.InputImages[0].URI != "https://img.local/input.png" {
+			t.Fatalf("unexpected input images: %+v", req.InputImages)
+		}
+		return &model.GenerationImageResponse{
+			TaskID:   req.TaskID,
+			TaskType: req.TaskType,
+			Status:   model.GenerationTaskCompleted,
+			Prompt:   req.Prompt,
+			Artifacts: []model.GenerationArtifact{
+				{Kind: "image", URI: "https://img.local/output.png"},
+			},
+		}, nil
+	}
+
+	svc := NewGenerationService(
+		WithGenerationSessionStore(store),
+		WithGenerationQueue(false, 0, 0),
+		WithGenerationImageCaller(imageCaller),
+	)
+
+	session, err := svc.StartSession(context.Background(), &model.GenerationSessionStartRequest{
+		Model: "flux-test",
+	})
+	if err != nil {
+		t.Fatalf("StartSession error: %v", err)
+	}
+
+	resp, err := svc.ChatSession(context.Background(), &model.GenerationSessionChatRequest{
+		SessionID: session.SessionID,
+		Prompt:    "保留构图，改成赛博朋克风格",
+		Attachments: []model.GenerationAttachment{
+			{Kind: "image", URI: "https://img.local/input.png"},
+		},
+		BaseURL: "https://mock.local",
+		APIKey:  "x",
+	}, nil)
+	if err != nil {
+		t.Fatalf("ChatSession error: %v", err)
+	}
+	if resp.TaskType != model.GenerationTaskTypeImageEdit {
+		t.Fatalf("unexpected response taskType: %s", resp.TaskType)
+	}
+}
+
+func TestGenerationSessionInfersImageGenerateFromImageField(t *testing.T) {
+	store := NewInMemoryGenerationStore()
+
+	imageCaller := func(_ context.Context, req *model.GenerationImageRequest) (*model.GenerationImageResponse, error) {
+		if req.TaskType != model.GenerationTaskTypeImageGenerate {
+			t.Fatalf("unexpected taskType: %s", req.TaskType)
+		}
+		if req.Image != "https://img.local/input.png" {
+			t.Fatalf("unexpected image field: %s", req.Image)
+		}
+		if req.Size != "2K" {
+			t.Fatalf("unexpected size: %s", req.Size)
+		}
+		if got, ok := req.ExtraBody["output_format"].(string); !ok || got != "png" {
+			t.Fatalf("unexpected output_format: %+v", req.ExtraBody["output_format"])
+		}
+		if got, ok := req.ExtraBody["watermark"].(bool); !ok || got {
+			t.Fatalf("unexpected watermark: %+v", req.ExtraBody["watermark"])
+		}
+		return &model.GenerationImageResponse{
+			TaskID:   req.TaskID,
+			TaskType: req.TaskType,
+			Status:   model.GenerationTaskCompleted,
+			Prompt:   req.Prompt,
+			Artifacts: []model.GenerationArtifact{
+				{Kind: "image", URI: "https://img.local/output.png"},
+			},
+		}, nil
+	}
+
+	svc := NewGenerationService(
+		WithGenerationSessionStore(store),
+		WithGenerationQueue(false, 0, 0),
+		WithGenerationImageCaller(imageCaller),
+	)
+
+	session, err := svc.StartSession(context.Background(), &model.GenerationSessionStartRequest{
+		Model: "seedream",
+	})
+	if err != nil {
+		t.Fatalf("StartSession error: %v", err)
+	}
+	watermark := false
+	resp, err := svc.ChatSession(context.Background(), &model.GenerationSessionChatRequest{
+		SessionID:    session.SessionID,
+		Prompt:       "保持姿势不变，改成透明玻璃材质",
+		Image:        "https://img.local/input.png",
+		Size:         "2K",
+		OutputFormat: "png",
+		Watermark:    &watermark,
+		BaseURL:      "https://mock.local",
+		APIKey:       "x",
+	}, nil)
+	if err != nil {
+		t.Fatalf("ChatSession error: %v", err)
+	}
+	if resp.TaskType != model.GenerationTaskTypeImageGenerate {
+		t.Fatalf("unexpected response taskType: %s", resp.TaskType)
+	}
+}
+
 func decodeMessages(body any) []map[string]string {
 	obj, ok := body.(map[string]any)
 	if !ok {
