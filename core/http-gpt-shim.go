@@ -458,47 +458,43 @@ func (h *ProxyRequestHandler) HandleReadableStream(isStream bool, ch chan any, o
 
 func (h *ProxyRequestHandler) HandleReadableStreamTransport(isStream bool, transport StreamTransport, ch chan any, onResult func(res any)) {
 	c := h.Context
-	var once sync.Once
 	var result []any
 	var flusher http.Flusher
 	var writeMu sync.Mutex
 	done := make(chan struct{})
-	defer close(done)
-	for message := range ch {
-		// 如果是 error，就退出循环
-		if _, isErr := message.(error); isErr {
-			return
+	var doneOnce sync.Once
+	closeDone := func() {
+		doneOnce.Do(func() {
+			close(done)
+		})
+	}
+	defer closeDone()
+
+	var streamReady bool
+	var setupOnce sync.Once
+	setupStream := func() bool {
+		if !isStream {
+			return false
 		}
-		// 首次写响应 Header
-		// 写 header 只能执行一次
-		once.Do(func() {
-			if !isStream {
-				return
-			}
+		setupOnce.Do(func() {
 			setupStreamHeaders(c, transport)
 			// 必须执行，强制写 header，避免被 Gin 缓冲
 			c.Writer.WriteHeaderNow()
 			fmt.Printf("writer type = %T\n", c.Writer)
-			// flusher
+
 			var ok bool
 			flusher, ok = c.Writer.(http.Flusher)
 			if !ok {
 				slog.Error("flusher not supported")
-				close(ch)
 				return
 			}
+			streamReady = true
 			flusher.Flush()
 
-			// 心跳 ticker
 			ticker := time.NewTicker(15 * time.Second)
-
-			// 最大存活时间
 			maxLifetime := time.NewTimer(30 * time.Minute)
-
-			// 客户端断开检测
 			closeNotify := c.Writer.CloseNotify()
 
-			// 后台 goroutine 管控连接生命周期
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -513,9 +509,7 @@ func (h *ProxyRequestHandler) HandleReadableStreamTransport(isStream bool, trans
 					case <-done:
 						return
 
-					// 心跳
 					case <-ticker.C:
-						// *** 在每次写之前确认连接是否还在 ***
 						select {
 						case <-closeNotify:
 							slog.Info("client disconnected (heartbeat loop)")
@@ -524,55 +518,53 @@ func (h *ProxyRequestHandler) HandleReadableStreamTransport(isStream bool, trans
 						}
 
 						writeMu.Lock()
-						_, err := c.Writer.Write([]byte(strings.Repeat(" ", 1024) + "\n"))
+						err := writeStreamHeartbeat(c.Writer, transport)
 						if err != nil {
 							writeMu.Unlock()
 							slog.Warn("heartbeat write failed", "err", err)
 							return
 						}
-						// flush
-						func() {
-							defer func() {
-								if r := recover(); r != nil {
-									slog.Warn("panic in flusher during heartbeat", "panic", r)
-								}
-							}()
-							flusher.Flush()
-						}()
+						flusher.Flush()
 						writeMu.Unlock()
 
-					// 超时
 					case <-maxLifetime.C:
 						slog.Info("max lifetime reached, closing stream")
 
 						writeMu.Lock()
-						_, err := c.Writer.Write([]byte(": end\n"))
+						err := writeStreamDone(c.Writer, transport)
 						if err != nil {
 							writeMu.Unlock()
-							close(ch)
+							closeReadableChannel(ch)
 							return
 						}
 						flusher.Flush()
 						writeMu.Unlock()
-						close(ch)
+						closeReadableChannel(ch)
 						return
 
-					// 客户端断开
 					case <-closeNotify:
 						slog.Info("stream client disconnected")
-						close(ch)
+						closeReadableChannel(ch)
 						return
 					}
 				}
 			}()
 		})
+		return streamReady
+	}
+
+	for message := range ch {
+		// 如果是 error，就退出循环
+		if _, isErr := message.(error); isErr {
+			return
+		}
 		if isStream {
-			// Marshal 成 JSON，但作为普通 chunk 发送（非 SSE）
-			bs, _ := json.Marshal(message)
+			if !setupStream() {
+				return
+			}
 
 			writeMu.Lock()
-			_, err := fmt.Fprintf(c.Writer, "%s\n", bs)
-			if err != nil {
+			if err := writeStreamPayload(c.Writer, transport, message); err != nil {
 				writeMu.Unlock()
 				slog.Error("写 chunk 失败", "err", err)
 				return
@@ -591,7 +583,48 @@ func (h *ProxyRequestHandler) HandleReadableStreamTransport(isStream bool, trans
 	if !isStream {
 		onResult(result)
 	}
-	close(done)
+	closeDone()
+}
+
+func closeReadableChannel(ch chan any) {
+	defer func() { _ = recover() }()
+	close(ch)
+}
+
+func writeStreamPayload(writer io.Writer, transport StreamTransport, message any) error {
+	bs, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+	if transport == StreamTransportSSE {
+		for _, line := range strings.Split(string(bs), "\n") {
+			if _, err = fmt.Fprintf(writer, "data: %s\n", line); err != nil {
+				return err
+			}
+		}
+		_, err = fmt.Fprint(writer, "\n")
+		return err
+	}
+	_, err = fmt.Fprintf(writer, "%s\n", bs)
+	return err
+}
+
+func writeStreamHeartbeat(writer io.Writer, transport StreamTransport) error {
+	if transport == StreamTransportSSE {
+		_, err := fmt.Fprint(writer, ": ping\n\n")
+		return err
+	}
+	_, err := writer.Write([]byte(strings.Repeat(" ", 1024) + "\n"))
+	return err
+}
+
+func writeStreamDone(writer io.Writer, transport StreamTransport) error {
+	if transport == StreamTransportSSE {
+		_, err := fmt.Fprint(writer, ": end\n\n")
+		return err
+	}
+	_, err := fmt.Fprint(writer, ": end\n")
+	return err
 }
 
 type StreamTransport string
