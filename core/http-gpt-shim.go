@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/exp/slog"
@@ -555,7 +556,15 @@ func (h *ProxyRequestHandler) HandleReadableStreamTransport(isStream bool, trans
 
 	for message := range ch {
 		// 如果是 error，就退出循环
-		if _, isErr := message.(error); isErr {
+		if err, isErr := message.(error); isErr {
+			if isStream && transport == StreamTransportSSE && errors.Is(err, io.EOF) && setupStream() {
+				writeMu.Lock()
+				_ = writeStreamDone(c.Writer, transport)
+				if flusher != nil {
+					flusher.Flush()
+				}
+				writeMu.Unlock()
+			}
 			return
 		}
 		if isStream {
@@ -620,7 +629,7 @@ func writeStreamHeartbeat(writer io.Writer, transport StreamTransport) error {
 
 func writeStreamDone(writer io.Writer, transport StreamTransport) error {
 	if transport == StreamTransportSSE {
-		_, err := fmt.Fprint(writer, ": end\n\n")
+		_, err := fmt.Fprint(writer, "data: [DONE]\n\n")
 		return err
 	}
 	_, err := fmt.Fprint(writer, ": end\n")
