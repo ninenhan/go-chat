@@ -455,3 +455,160 @@ func (h *ProxyRequestHandler) HandleReadableStream(isStream bool, ch chan any, o
 	}
 	close(done)
 }
+
+func (h *ProxyRequestHandler) HandleReadableStreamTransport(isStream bool, transport StreamTransport, ch chan any, onResult func(res any)) {
+	c := h.Context
+	var once sync.Once
+	var result []any
+	var flusher http.Flusher
+	var writeMu sync.Mutex
+	done := make(chan struct{})
+	defer close(done)
+	for message := range ch {
+		// 如果是 error，就退出循环
+		if _, isErr := message.(error); isErr {
+			return
+		}
+		// 首次写响应 Header
+		// 写 header 只能执行一次
+		once.Do(func() {
+			if !isStream {
+				return
+			}
+			setupStreamHeaders(c, transport)
+			// 必须执行，强制写 header，避免被 Gin 缓冲
+			c.Writer.WriteHeaderNow()
+			fmt.Printf("writer type = %T\n", c.Writer)
+			// flusher
+			var ok bool
+			flusher, ok = c.Writer.(http.Flusher)
+			if !ok {
+				slog.Error("flusher not supported")
+				close(ch)
+				return
+			}
+			flusher.Flush()
+
+			// 心跳 ticker
+			ticker := time.NewTicker(15 * time.Second)
+
+			// 最大存活时间
+			maxLifetime := time.NewTimer(30 * time.Minute)
+
+			// 客户端断开检测
+			closeNotify := c.Writer.CloseNotify()
+
+			// 后台 goroutine 管控连接生命周期
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Warn("panic in heartbeat loop", "panic", r)
+					}
+				}()
+				defer ticker.Stop()
+				defer maxLifetime.Stop()
+
+				for {
+					select {
+					case <-done:
+						return
+
+					// 心跳
+					case <-ticker.C:
+						// *** 在每次写之前确认连接是否还在 ***
+						select {
+						case <-closeNotify:
+							slog.Info("client disconnected (heartbeat loop)")
+							return
+						default:
+						}
+
+						writeMu.Lock()
+						_, err := c.Writer.Write([]byte(strings.Repeat(" ", 1024) + "\n"))
+						if err != nil {
+							writeMu.Unlock()
+							slog.Warn("heartbeat write failed", "err", err)
+							return
+						}
+						// flush
+						func() {
+							defer func() {
+								if r := recover(); r != nil {
+									slog.Warn("panic in flusher during heartbeat", "panic", r)
+								}
+							}()
+							flusher.Flush()
+						}()
+						writeMu.Unlock()
+
+					// 超时
+					case <-maxLifetime.C:
+						slog.Info("max lifetime reached, closing stream")
+
+						writeMu.Lock()
+						_, err := c.Writer.Write([]byte(": end\n"))
+						if err != nil {
+							writeMu.Unlock()
+							close(ch)
+							return
+						}
+						flusher.Flush()
+						writeMu.Unlock()
+						close(ch)
+						return
+
+					// 客户端断开
+					case <-closeNotify:
+						slog.Info("stream client disconnected")
+						close(ch)
+						return
+					}
+				}
+			}()
+		})
+		if isStream {
+			// Marshal 成 JSON，但作为普通 chunk 发送（非 SSE）
+			bs, _ := json.Marshal(message)
+
+			writeMu.Lock()
+			_, err := fmt.Fprintf(c.Writer, "%s\n", bs)
+			if err != nil {
+				writeMu.Unlock()
+				slog.Error("写 chunk 失败", "err", err)
+				return
+			}
+
+			// 强制刷新 chunk 输出
+			if flusher != nil {
+				flusher.Flush()
+				slog.Info("HandleReadableStream message")
+			}
+			writeMu.Unlock()
+			continue
+		}
+		result = append(result, message)
+	}
+	if !isStream {
+		onResult(result)
+	}
+	close(done)
+}
+
+type StreamTransport string
+
+const (
+	streamTransportNDJSON StreamTransport = "ndjson"
+	streamTransportSSE    StreamTransport = "sse"
+)
+
+func setupStreamHeaders(c *gin.Context, transport StreamTransport) {
+	if transport == streamTransportNDJSON {
+		c.Header("Content-Type", "application/x-ndjson; charset=utf-8")
+	} else {
+		c.Header("Content-Type", "text/event-stream; charset=utf-8")
+	}
+	c.Header("Cache-Control", "no-cache, no-transform")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+}
