@@ -597,12 +597,12 @@ func (h *ProxyRequestHandler) HandleReadableStreamTransport(isStream bool, trans
 type StreamTransport string
 
 const (
-	streamTransportNDJSON StreamTransport = "ndjson"
-	streamTransportSSE    StreamTransport = "sse"
+	StreamTransportNDJSON StreamTransport = "ndjson"
+	StreamTransportSSE    StreamTransport = "sse"
 )
 
 func setupStreamHeaders(c *gin.Context, transport StreamTransport) {
-	if transport == streamTransportNDJSON {
+	if transport == StreamTransportNDJSON {
 		c.Header("Content-Type", "application/x-ndjson; charset=utf-8")
 	} else {
 		c.Header("Content-Type", "text/event-stream; charset=utf-8")
